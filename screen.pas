@@ -75,15 +75,15 @@ sprite7zoom:=$00010001;
 
 // --------- set the screen resolution and pallettes
 
-bordercolor:=$0;
-graphicmode:=0;
-xres:=1792;
-yres:=1120;
+//bordercolor:=$0;
+//graphicmode:=0;
+//xres:=1792;
+//yres:=1120;
 
-setpallette(ataripallette,0);
-setpallette(ataripallette,1);
-setpallette(ataripallette,2);
-setpallette(ataripallette,3);
+//setpallette(ataripallette,0);
+//setpallette(ataripallette,1);
+//setpallette(ataripallette,2);
+//setpallette(ataripallette,3);
 
 
 
@@ -96,7 +96,7 @@ setpallette(ataripallette,3);
 
 
 
-cls(202);
+cls(132);
 
 
 c:=0;
@@ -179,8 +179,8 @@ if pl<>nil then pl.outtextxy(333-8*length(s2),84,s2,200);
 
 //refresh the status bar
 
-panel.box(1724,4,64,16,11);
-panel.outtextxy(1724,4,clock,0);
+panel.box(panel.l-68,4,64,16,11);
+panel.outtextxy(panel.l-68,4,clock,0);
 
 
 screentime:=gettime-screentime;
