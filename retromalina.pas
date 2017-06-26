@@ -197,7 +197,7 @@ type
        Constructor Create(CreateSuspended : boolean);
      end;
 
-
+{
      // File buffer thread
 
      TFileBuffer= class(TThread)
@@ -230,7 +230,7 @@ type
       procedure setmp3(mp3b:integer);
      end;
 
-
+}
 
      // mouse thread
 
@@ -312,7 +312,7 @@ var fh,filetype:integer;                // this needs cleaning...
 
     buf2:array[0..1919] of smallint;
     buf2f:array[0..959] of single absolute buf2;
-    filebuffer:TFileBuffer;
+//    filebuffer:TFileBuffer=nil;
     amouse:tmouse ;
     akeyboard:tkeyboard ;
     windows:Twindows;
@@ -444,7 +444,7 @@ var fh,filetype:integer;                // this needs cleaning...
     nativey:         cardinal absolute base+_nativey;
 
 
-    desired, obtained:TAudioSpec;
+
     error:integer;
     mousereports:array[0..31] of TMouseReport;
 
@@ -456,6 +456,9 @@ var fh,filetype:integer;                // this needs cleaning...
    redrawing:integer=$30800000;
    windowsdone:boolean=false;
     drive:string;
+
+    mp3frames:integer=0;
+    debug1,debug2,debug3:cardinal;
 
 // prototypes
 
@@ -493,7 +496,7 @@ procedure outtextxys(x,y:integer; t:string;c,s:integer);
 procedure outtextxyzs(x,y:integer; t:string;c,xz,yz,s:integer);
 procedure scrollup;
 function sid(mode:integer):tsample;
-procedure AudioCallback(userdata: Pointer; stream: PUInt8; len:Integer );
+//procedure AudioCallback(userdata: Pointer; stream: PUInt8; len:Integer );
 function getpixel(x,y:integer):integer; inline;
 function getkey:integer; inline;
 function readkey:integer; inline;
@@ -764,7 +767,7 @@ repeat
   until terminated;
 end;
 
-
+{
 // ---- TFileBuffer thread methods --------------------------------------------------
 
 constructor TFileBuffer.Create(CreateSuspended : boolean);
@@ -784,7 +787,7 @@ needclear:=false;
 seekamount:=0;
 eof:=true;
 mp3:=0;
-qq:=32768;
+qq:=2048;
 end;
 
 procedure TFileBuffer.Execute;
@@ -793,6 +796,7 @@ var i,il2,k:integer;
     ml:int64;
     const cnt:integer=0;
  var   outbuf2: PSmallint;
+     pcml:integer;
 
 //    info:mp3_info_t;
 //    framesize:integer;
@@ -812,7 +816,7 @@ repeat
       fh:=newfh;
       newfh:=-1;
       eof:=false;
-      qq:=32768;
+      qq:=2048;
       end;
     if seekamount<>0 then needclear:=true;
     if needclear then
@@ -823,7 +827,7 @@ repeat
       empty:=true;
       m:=131071;
       for i:=0 to 131071 do buf[i]:=0;
-      qq:=32768;
+      qq:=2048;
       for i:=0 to 32767 do tempbuf[i]:=0;
       end;
     if (seekamount<>0) and (fh>0) then
@@ -835,7 +839,7 @@ repeat
     end;
     // end of maintenance processes
 
-  if (fh>0) and not eof then
+  if (fh>0){ and not eof} then
     begin
     if koniec>=pocz then m:=131072-koniec+pocz-1 else m:=pocz-koniec-1;
     if m>=32768 then // more than 32k free place, do a read
@@ -843,7 +847,7 @@ repeat
       if mp3=0 then  // no decoding needed, simply read 32k from file
         begin
         il:=fileread(fh,tempbuf[0],qq);
-        for i:=0 to il-1 do buf[(i+koniec) and $1FFFF]:=tempbuf[i] ;
+        if il<>0 then for i:=0 to il-1 do buf[(i+koniec) and $1FFFF]:=tempbuf[i] ;
         koniec:=(koniec+il) and $1FFFF;
         m:=m-il;
         if m<3*32678 then empty:=false;
@@ -852,21 +856,24 @@ repeat
       else // compressed file: read and decompress
         begin
         cnt+=1;
-        il:=fileread(fh,tempbuf[32768-qq],qq);
-        if (il<qq) and empty then eof:=true;
+        il:=fileread(fh,tempbuf[2048-qq],qq);
+        if (il<qq) then eof:=true;
         if il=qq then
           begin
 
-          ml:=gettime;
+           ml:=gettime;
 
 
-           mad_stream_buffer(@test_mad_stream,@tempbuf, 32768);
+           mad_stream_buffer(@test_mad_stream,@tempbuf, 2048);
            mad_frame_decode(@test_mad_frame, @test_mad_stream);
            mad_synth_frame(@test_mad_synth,@test_mad_frame);
+           mp3frames+=1;
+           pcml:=test_mad_synth.pcm.length;
 
-          if test_mad_synth.pcm.channels=2 then for i:=0 to 1151 do begin outbuf2[2*i]:= test_mad_synth.pcm.samples[0,i] div 8704;   outbuf2[2*i+1]:= test_mad_synth.pcm.samples[1,i] div 8704;  end;
-          if test_mad_synth.pcm.channels=1 then for i:=0 to 1151 do begin outbuf2[2*i]:= test_mad_synth.pcm.samples[0,i] div 8704;   outbuf2[2*i+1]:= test_mad_synth.pcm.samples[0,i] div 8704;  end;
-           il2:= (PtrUInt(test_mad_stream.next_frame)-ptruint(@tempbuf));
+  //        box(0,0,100,100,0); outtextxy(0,0,inttostr(l),15);
+          if test_mad_synth.pcm.channels=2 then for i:=0 to pcml-1 do begin outbuf2[2*i]:= test_mad_synth.pcm.samples[0,i] div 8704;   outbuf2[2*i+1]:= test_mad_synth.pcm.samples[1,i] div 8704;  end;
+          if test_mad_synth.pcm.channels=1 then for i:=0 to pcml-1 do begin outbuf2[2*i]:= test_mad_synth.pcm.samples[0,i] div 8704;   outbuf2[2*i+1]:= test_mad_synth.pcm.samples[0,i] div 8704;  end;
+          il2:= (PtrUInt(test_mad_stream.next_frame)-ptruint(@tempbuf));
 
       // box(100,100,100,100,0); outtextxyz(100,100,inttostr(PtrUInt(test_mad_stream.next_frame)-ptruint(@tempbuf)),15,2,2);     outtextxyz(100,132,inttostr(tempbuf[il2]),15,2,2);
 
@@ -874,13 +881,14 @@ repeat
           else head.brate:=8*((120+il2*10) div 240);
           head.srate:=44100;//info.sample_rate;
           head.channels:=2;//info.channels;
-          for i:=il2 to 32767 do tempbuf[i-il2]:=tempbuf[i];
-          for i:=0 to 4*1152-1 do buf[(i+koniec) and $1FFFF]:=outbuf[i]; // audio bytes
+          for i:=il2 to 2047 do tempbuf[i-il2]:=tempbuf[i];
+          for i:=0 to 4*pcml-1 do buf[(i+koniec) and $1FFFF]:=outbuf[i]; // audio bytes
           qq:=il2;
-          koniec:=(koniec+4*1152) and $1FFFF;
+          koniec:=(koniec+4*pcml) and $1FFFF;
           mp3time:=gettime-ml;
+
           if koniec>=pocz then m:=131072-koniec+pocz-1 else m:=pocz-koniec-1;
-          if m<131072-32768 then empty:=false;
+          if m<131072-1152 then empty:=false;
           end;
         end;
       end
@@ -907,7 +915,7 @@ procedure TFileBuffer.setmp3(mp3b:integer);
 
 begin
 mp3:=mp3b;
-qq:=32768;
+qq:=2048;
 needclear:=true;
 end;
 
@@ -929,6 +937,7 @@ if not empty then
   begin
   if koniec>=pocz then d:=koniec-pocz
   else d:=131072-pocz+koniec;
+  pizda:=d;
   if d>=ii then
     begin
     full:=false;
@@ -939,8 +948,10 @@ if not empty then
     end
   else
     begin
-    for i:=0 to ii-1 do poke(b+i,0);
-    result:=0;
+    for i:=0 to d-1 do poke(b+i,buf[(pocz+i) and $1FFFF]);
+    for i:=d to ii-1 do poke(b+i,0);
+    result:=d;
+    pocz:=(pocz+d) and $1FFFF;
     empty:=true;
     end;
   end;
@@ -960,7 +971,7 @@ begin
 self.needclear:=true;
 end;
 
-
+}
 // ---- TRetro thread methods --------------------------------------------------
 
 // ----------------------------------------------------------------------
@@ -1014,25 +1025,25 @@ repeat
   CleanDataCacheRange(integer(p2),xres*yres*4);
   framecnt+=1;
 
-  FramebufferDeviceSetOffset(fb,0,0,True);
+  FramebufferDeviceSetOffset(fb,0,32,True);
   FramebufferDeviceWaitSync(fb);
 
   vblank1:=0;
   t:=gettime;
 
 //  scrconvert(pointer($30b00000),p2+2304000);   //a
-  scrconvertnative(pointer($30b00000),p2+xres*yres);   //a
+  scrconvertnative(pointer($30b00000),p2+xres*(yres+32));   //a
   screenaddr:=$30b00000;
 
   tim:=gettime-t;
   t:=gettime;
-  sprite(p2+xres*yres);
+  sprite(p2+xres*(yres+32));
   ts:=gettime-t;
   vblank1:=1;
-  CleanDataCacheRange(integer(p2)+xres*yres*4,xres*yres*4);
+  CleanDataCacheRange(integer(p2)+xres*(yres+32)*4,xres*yres*4);
   framecnt+=1;
 
-  FramebufferDeviceSetOffset(fb,0,yres,True);
+  FramebufferDeviceSetOffset(fb,0,yres+64,True);
   FramebufferDeviceWaitSync(fb);
 
 
@@ -1052,36 +1063,45 @@ procedure initmachine(mode:integer);
 
 // -- rev 20170606
 
-var i:integer;
+var i,q:integer;
 
 
 begin
-sleep(3000);
-//init the framebuffer
-//framebufferinit;
-// wait until default framebuffer is initialized
-removeramlimits(integer(@sprite));
 for i:=base to base+$FFFFF do poke(i,0); // clean all system area
 repeat fb:=FramebufferDevicegetdefault until fb<>nil;
-
 // get native resolution
 FramebufferDeviceGetProperties(fb,@FramebufferProperties);
 nativex:=FramebufferProperties.PhysicalWidth;
 nativey:=FramebufferProperties.PhysicalHeight;
 FramebufferDeviceRelease(fb);
+
+if (nativex>=1024) and (nativey>=768) then
+  begin
+  xres:=nativex;
+  yres:=nativey;
+  end
+else
+  begin
+  xres:=2*nativex;
+  yres:=2*nativey;
+  end;
+
 FramebufferProperties.Depth:=32;
-FramebufferProperties.PhysicalWidth:=nativex;
-FramebufferProperties.PhysicalHeight:=nativey;
+FramebufferProperties.PhysicalWidth:=xres;
+FramebufferProperties.PhysicalHeight:=yres;
 FramebufferProperties.VirtualWidth:=FramebufferProperties.PhysicalWidth;
-FramebufferProperties.VirtualHeight:=FramebufferProperties.PhysicalHeight * 2;
-FramebufferDeviceAllocate(fb,@FramebufferProperties);
-sleep(100);
+FramebufferProperties.VirtualHeight:=96+FramebufferProperties.PhysicalHeight * 2;
+q:=FramebufferDeviceAllocate(fb,@FramebufferProperties);
+sleep(200);
+//i:=0;
+//repeat inc(i); sleep(100); until (fb^.FramebufferState = FRAMEBUFFER_STATE_ENABLED) or (i>20);
+//if i>20 then systemrestart(0);
+
 FramebufferDeviceGetProperties(fb,@FramebufferProperties);
-p2:=Pointer(FramebufferProperties.Address);
+p2:=Pointer(FramebufferProperties.Address+128*xres);
 
 //for i:=0 to (nativex*nativey)-1 do lpoke(PtrUint(p2)+4*i,ataripallette[146]);
-xres:=nativex;
-yres:=nativey;
+
 bordercolor:=0;
 displaystart:=$30000000;                 // vitual framebuffer address
 framecnt:=0;                             // frame counter
@@ -1117,10 +1137,11 @@ mad_stream_init(@test_mad_stream);
 mad_synth_init(@test_mad_synth);
 mad_frame_init(@test_mad_frame);
 
+removeramlimits(integer(@sprite));
 
 
-filebuffer:=Tfilebuffer.create(true);
-filebuffer.start;
+//filebuffer:=Tfilebuffer.create(true);
+//filebuffer.start;
 
 mousex:=xres div 2;
 mousey:=yres div 2;
@@ -1161,7 +1182,7 @@ begin
 thread.terminate;
 repeat until running=0;
 //thread3.terminate;
-filebuffer.terminate;
+//filebuffer.terminate;
 amouse.terminate;
 akeyboard.terminate;
 windows.terminate;
@@ -1354,8 +1375,8 @@ a:=displaystart;
 c:=integer(src);//$30800000;  // map start
 e:=bordercolor;
 b:=base+_pallette;
-ny:=nativey;
-nx:=nativex*4;
+ny:=yres;//nativey;
+nx:=xres*4;//nativex*4;
 
                 asm
 
@@ -3657,158 +3678,7 @@ sid[0]:= siddata[$6b]; //  2048+ (siddata[$6c] div (16*16384));//16384;//32768;
 sid[1]:= siddata[$6c];//2048+ (siddata[$6b] div (16*16384));//16384;//32768;
 
 
-
-//sid[0]:=sid1;
-//sid[1]:=sid1l;
 end;
-
-
-
-procedure oscilloscope(sample:integer);
-
-begin
-oldsc:=sc;
-sc:=sample+(sample div 2);
-scope[scj]:=sc;
-inc(scj);
-if scj>959 then if (oldsc<0) and (sc>0) then scj:=0 else scj:=959;
-end;
-
-
-procedure AudioCallback(userdata: Pointer; stream: PUInt8; len:Integer );
-
-label p999;
-
-var audio2:psmallint;
-    audio3:psingle;
-    s:tsample;
-    ttt:int64;
-    i,il:integer;
-    buf:array[0..25] of byte;
-
-const aa:integer=0;
-
-
-begin
-
-audio2:=psmallint(stream);
-audio3:=psingle(stream);
-
-ttt:=clockgettotal;
-
-
-
-if (filetype=3) or (filetype=4) or (filetype=5) then
-  begin
-  time6502:=0;
-  if sfh>0 then
-    begin
-    if filebuffer.eof then // il<>1536 then
-      begin
-      fileclose(sfh);
-      sfh:=-1;
-      songtime:=0;
-      pauseaudio(1);
-      nextsong:=1;
-      timer1:=-1;
-      end
-    else
-      begin
-      il:=filebuffer.getdata(integer(stream),len);
-      timer1+=siddelay;
-      songtime+=siddelay;
-      if ((head.pcm=1) or (filetype>=4)) and (len=1536) then for i:=0 to 383 do oscilloscope(audio2[2*i]+audio2[2*i+1])
-                         else if ((head.pcm=1) or (filetype>=4)) and (len=768) then for i:=0 to 383 do oscilloscope(audio2[i])
-                         else for i:=0 to 95 do oscilloscope(round(16384*(audio3[4*i]+audio3[4*i+1]+audio3[4*i+2]+audio3[4*i+3])));
-      end;
-    end;
-  end
-else if filetype=6 then
-  begin
-  time6502:=0;
-  timer1+=siddelay;
-  songtime+=siddelay;
-  for i:=0 to 383 do oscilloscope(audio2[2*i]+audio2[2*i+1]);
-  if xmp_play_buffer(xmp_context,stream,len,2)<>0 then
-    begin
-     pauseaudio(1);
-     nextsong:=1;
-    end
-   else
-   begin
-     for i:=0 to 767 do audio2[i]:=word(audio2[i])-32768;
-   end;
-  end
-else
-  begin
-  aa+=2500;
-  if (aa>=siddelay) then
-    begin
-    aa-=siddelay;
-    if sfh>-1 then
-      begin
-      if filetype=0 then
-
-        begin
-        time6502:=0;
-        il:=fileread(sfh,buf,25);
-        if il=25 then
-          begin
-          for i:=0 to 24 do poke(base+$d400+i,buf[i]);
-          timer1+=siddelay;
-          songtime+=siddelay;
-          end
-        else
-          begin
-          fileclose(sfh);
-          sfh:=-1;
-          pause1:=true;
-          songtime:=0;
-          timer1:=-1;
-          for i:=0 to 6 do lpoke(base+$d400+4*i,0);
-          end;
-        end
-      else if filetype=1 then
-        begin
-        for i:=0 to 15 do times6502[i]:=times6502[i+1];
-        t6:=clockgettotal;
-        jsr6502(256,play);
-        times6502[15]:=clockgettotal-t6;
-        t6:=0; for i:=0 to 15 do t6+=times6502[i];
-        time6502:=t6-15;
-        //CleanDataCacheRange($d400,32);
-        timer1+=siddelay;
-        songtime+=siddelay;
-        end;
-
-
-      end;
-    end;
-    s:=sid(1);
-    audio2[0]:=(s[0]);
-    audio2[1]:=(s[1]);
-    oscilloscope(s[0]+s[1]);
-    for i:=1 to 1199 do
-      begin
-      s:=sid(0);
-      audio2[2*i]:=(s[0]);
-      audio2[2*i+1]:=(s[1]);
-      if (i mod 10) = 0 then oscilloscope(s[0]+s[1]);
-      end;
-  end;
-inc(sidcount);
-//sidtime+=gettime-t;
-p999:
-sidtime:=clockgettotal-ttt;
-end;
-
-
-
-
-
-
-
-
 
 end.
 
