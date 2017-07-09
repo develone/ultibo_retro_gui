@@ -90,17 +90,24 @@ procedure SetVolume(vol:single);
 procedure SetVolume(vol:integer);
 procedure setDBVolume(vol:single);
 procedure SetBalance(amount:integer);
+function getDBVolume:single;
 
 // Simplified functions
 function  SA_OpenAudio(freq,bits,channels,samples:integer; callback: TAudioSpecCallback):integer;
 function  SA_ChangeParams(freq,bits,channels,samples:integer): Integer;
 function  SA_GetCurrentFreq:integer;
 function  SA_GetCurrentRange:integer;
-
+procedure  SA_SetEQ(band,db:integer);
+procedure  SA_SetEQpreamp(db:integer);
 var
 dmanextcb,
 ctrl1adr,
 ctrl2adr:cardinal;
+et:int64;
+eq_preamp:integer=0;
+eq:array[0..9] of integer=(0,0,0,0,0,0,0,0,0,0);
+eqdbtable:array[-12..12] of integer=(256,288,323,363,408,458,513,579,646,725,814,914,1024,1150,1292,1450,1628,1828,2051,2302,2583,2900,3253,3651,4096);
+equalizer_active:boolean=false;
 
 //------------------ End of Interface ------------------------------------------
 
@@ -237,10 +244,13 @@ var       gpfsel4:cardinal     absolute _gpfsel4;      // GPIO Function Select 4
 
           audio_opened:boolean=false;
           balance:integer=128;
+          dbvolume:single=0;
 
 procedure InitAudioEx(range,t_length:integer);  forward;
 function noiseshaper8(bufaddr,outbuf,oversample,len:integer):integer; forward;
 function noiseshaper9(bufaddr,outbuf,oversample,len:integer):integer; forward;
+procedure equalizer(bufaddr,len:integer); forward;
+procedure equalizer2(bufaddr,len:integer); forward;
 
 // ------------------------------------------------
 // A helper procedure which removes RAM RO limit
@@ -478,6 +488,8 @@ CurrentAudioSpec:=obtained^;
 samplebuffer_ptr:=getmem(sample_buffer_size);
 samplebuffer_32_ptr:=getmem(sample_buffer_32_size);
 removeramlimits(integer(@noiseshaper8));  // noise shaper uses local vars or it will be slower
+removeramlimits(integer(@equalizer));  // noise shaper uses local vars or it will be slower
+removeramlimits(integer(@equalizer2));  // noise shaper uses local vars or it will be slower
 removeramlimits(integer(@noiseshaper9));  // noise shaper uses local vars or it will be slower
 // now create and start the audio thread
 pauseA:=1;
@@ -655,7 +667,11 @@ procedure SetVolume(vol:single);
 // Setting the volume as float in range 0..1
 
 begin
-if (vol>=0) and (vol<=1) then volume:=round(vol*4096);
+if (vol>=0) and (vol<=1) then
+  begin
+  volume:=round(vol*4096);
+  dbvolume:=20*log10(vol);
+  end;
 end;
 
 procedure SetVolume(vol:integer);
@@ -663,7 +679,11 @@ procedure SetVolume(vol:integer);
 // Setting the volume as integer in range 0..4096
 
 begin
-if (vol>=0) and (vol<=4096) then volume:=vol;
+if (vol>=0) and (vol<=4096) then
+  begin
+  volume:=vol;
+  dbvolume:=20*log10(vol/4096)
+  end;
 end;
 
 procedure setDBVolume(vol:single);
@@ -671,15 +691,1146 @@ procedure setDBVolume(vol:single);
 // Setting decibel volume. This has to be negative number in range ~-72..0)
 
 begin
+dbvolume:=vol;
 if (vol<0) and (vol>=-72) then volume:=round(4096*power(10,vol/20));
 if vol<-72 then volume:=0;
 if vol>=0 then volume:=4096;
+end;
+
+function getDBVolume:single;
+
+begin
+result:=dbvolume;
 end;
 
 procedure setbalance(amount:integer);
 
 begin
 balance:=amount;
+end;
+
+
+procedure equalizer2(bufaddr,len:integer);
+
+label p101,p102,p999,
+      filter1ll,filter2ll,filter3ll,filter4ll,filter5ll,
+      filter6ll,filter7ll,filter8ll,filter9ll,
+      filter1lr,filter2lr,filter3lr,filter4lr,filter5lr,
+      filter6lr,filter7lr,filter8lr,filter9lr,
+      len1,bufaddr1,
+      e1freq, e2freq, e3freq, e4freq, e5freq, e6freq, e7freq, e8freq, e9freq, e10freq,
+      e1db,e2db,e3db,e4db,e5db,e6db,e7db,e8db,e9db,e10db,preamp;
+
+var ptr:Pcardinal;
+    e1,e2,e3,e4,e5,e6,e7,e8,e9,e10,p:cardinal;
+
+begin
+e1:=eqdbtable[eq[0]];
+e2:=eqdbtable[eq[1]];
+e3:=eqdbtable[eq[2]];
+e4:=eqdbtable[eq[3]];
+e5:=eqdbtable[eq[4]];
+e6:=eqdbtable[eq[5]];
+e7:=eqdbtable[eq[6]];
+e8:=eqdbtable[eq[7]];
+e9:=eqdbtable[eq[8]];
+e10:=eqdbtable[eq[9]];
+P:=eqdbtable[eq_preamp];
+
+
+//signed 28bit
+
+                asm
+
+                push {r0-r12,r14}
+
+                ldr r0,p
+                ldr r1,e1
+                ldr r2,e2
+                ldr r3,e3
+                ldr r4,e4
+                ldr r5,e5
+                ldr r6,e6
+                ldr r7,e7
+                ldr r8,e8
+                ldr r9,e9
+                ldr r10,e10
+
+                str r0,preamp
+                str r1,e1db
+                str r2,e2db
+                str r3,e3db
+                str r4,e4db
+                str r5,e5db
+                str r6,e6db
+                str r7,e7db
+                str r8,e8db
+                str r9,e9db
+                str r10,e10db
+
+                ldr r0,len
+                ldr r12,bufaddr
+
+                str r0,len1
+                str r12,bufaddr1
+
+                ldr r1,filter1ll
+                ldr r2,filter2ll
+                ldr r3,filter3ll
+                ldr r4,filter4ll
+                ldr r5,filter5ll
+                ldr r6,filter6ll
+                ldr r7,filter7ll
+                ldr r8,filter8ll
+                ldr r9,filter9ll
+                mov r10,#0
+
+p101:           ldr r14,[r12]
+                sub r14,#0x8000000    //signed  28 bit
+
+                mov r10,#0
+                sub r14,r1           // r14=highpass
+                ldr r11,e1freq
+                smlal r10,r1,r14,r11
+
+                sub r14,r2
+                mov r10,#0
+                lsl r11,#1
+                smlal r10,r2,r14,r11
+
+                sub r14,r3
+                mov r10,#0
+                lsl r11,#1
+                smlal r10,r3,r14,r11
+
+                sub r14,r4
+                mov r10,#0
+                lsl r11,#1
+                smlal r10,r4,r14,r11
+
+                sub r14,r5
+                mov r10,#0
+                lsl r11,#1
+                smlal r10,r5,r14,r11
+
+                sub r14,r6
+                mov r10,#0
+                lsl r11,#1
+                smlal r10,r6,r14,r11
+
+                sub r14,r7
+                mov r10,#0
+                lsl r11,#1
+                smlal r10,r7,r14,r11
+
+                sub r14,r8
+                mov r10,#0
+                lsl r11,#1
+                smlal r10,r8,r14,r11
+
+                sub r14,r9
+                mov r10,#0
+                lsl r11,#1
+                smlal r10,r9,r14,r11
+
+                mov r10, #0
+
+                ldr r11,e10db               // 16 kHz
+                smull r10,r11,r14,r11
+                lsr r10,#10
+                orr r10,r10,r11,lsl #22
+
+                ldr r11,e9db
+                smull r14,r11,r9,r11
+                lsr r14,#10
+                orr r14,r14,r11,lsl #22
+                add r10,r14
+
+                ldr r11,e8db
+                smull r14,r11,r8,r11
+                lsr r14,#10
+                orr r14,r14,r11,lsl #22
+                add r10,r14
+
+                ldr r11,e7db
+                smull r14,r11,r7,r11
+                lsr r14,#10
+                orr r14,r14,r11,lsl #22
+                add r10,r14
+
+                ldr r11,e6db
+                smull r14,r11,r6,r11
+                lsr r14,#10
+                orr r14,r14,r11,lsl #22
+                add r10,r14
+
+                ldr r11,e5db
+                smull r14,r11,r5,r11
+                lsr r14,#10
+                orr r14,r14,r11,lsl #22
+                add r10,r14
+
+                ldr r11,e4db
+                smull r14,r11,r4,r11
+                lsr r14,#10
+                orr r14,r14,r11,lsl #22
+                add r10,r14
+
+                ldr r11,e3db
+                smull r14,r11,r3,r11
+                lsr r14,#10
+                orr r14,r14,r11,lsl #22
+                add r10,r14
+
+                ldr r11,e2db
+                smull r14,r11,r2,r11
+                lsr r14,#10
+                orr r14,r14,r11,lsl #22
+                add r10,r14
+
+                ldr r11,e1db
+                smull r14,r11,r1,r11
+                lsr r14,#10
+                orr r14,r14,r11,lsl #22
+                add r10,r14
+
+
+                ldr r14,preamp
+                lsl r14,#18
+                smull r11,r10,r14,r10
+
+                lsl r10,#4
+
+                cmp r10,#0x8000000
+                movge r10,#0x8000000
+                subge r10,#1
+                cmp r10,#-0x8000000
+                movle r10,#-0x8000000
+                addle r10,#1
+
+
+                add r10,#0x8000000
+
+                str r10,[r12],#8
+
+                subs r0,#1
+                bne p101
+
+                str r1,filter1ll
+                str r2,filter2ll
+                str r3,filter3ll
+                str r4,filter4ll
+                str r5,filter5ll
+                str r6,filter6ll
+                str r7,filter7ll
+                str r8,filter8ll
+                str r9,filter9ll
+
+// right
+
+                ldr r0,len1
+                ldr r12,bufaddr1
+                add r12,#4
+
+                ldr r1,filter1lr
+                ldr r2,filter2lr
+                ldr r3,filter3lr
+                ldr r4,filter4lr
+                ldr r5,filter5lr
+                ldr r6,filter6lr
+                ldr r7,filter7lr
+                ldr r8,filter8lr
+                ldr r9,filter9lr
+                mov r10,#0
+
+p102:           ldr r14,[r12]
+                sub r14,#0x8000000    //signed  28 bit
+
+                mov r10,#0
+                sub r14,r1           // r14=highpass
+                ldr r11,e1freq
+                smlal r10,r1,r14,r11
+
+                sub r14,r2
+                mov r10,#0
+                lsl r11,#1
+                smlal r10,r2,r14,r11
+
+                sub r14,r3
+                mov r10,#0
+                lsl r11,#1
+                smlal r10,r3,r14,r11
+
+                sub r14,r4
+                mov r10,#0
+                lsl r11,#1
+                smlal r10,r4,r14,r11
+
+                sub r14,r5
+                mov r10,#0
+                lsl r11,#1
+                smlal r10,r5,r14,r11
+
+                sub r14,r6
+                mov r10,#0
+                lsl r11,#1
+                smlal r10,r6,r14,r11
+
+                sub r14,r7
+                mov r10,#0
+                lsl r11,#1
+                smlal r10,r7,r14,r11
+
+                sub r14,r8
+                mov r10,#0
+                lsl r11,#1
+                smlal r10,r8,r14,r11
+
+                sub r14,r9
+                mov r10,#0
+                lsl r11,#1
+                smlal r10,r9,r14,r11
+
+                mov r10, #0
+
+                ldr r11,e10db               // 16 kHz
+                smull r10,r11,r14,r11
+                lsr r10,#10
+                orr r10,r10,r11,lsl #22
+
+                ldr r11,e9db
+                smull r14,r11,r9,r11
+                lsr r14,#10
+                orr r14,r14,r11,lsl #22
+                add r10,r14
+
+                ldr r11,e8db
+                smull r14,r11,r8,r11
+                lsr r14,#10
+                orr r14,r14,r11,lsl #22
+                add r10,r14
+
+                ldr r11,e7db
+                smull r14,r11,r7,r11
+                lsr r14,#10
+                orr r14,r14,r11,lsl #22
+                add r10,r14
+
+                ldr r11,e6db
+                smull r14,r11,r6,r11
+                lsr r14,#10
+                orr r14,r14,r11,lsl #22
+                add r10,r14
+
+                ldr r11,e5db
+                smull r14,r11,r5,r11
+                lsr r14,#10
+                orr r14,r14,r11,lsl #22
+                add r10,r14
+
+                ldr r11,e4db
+                smull r14,r11,r4,r11
+                lsr r14,#10
+                orr r14,r14,r11,lsl #22
+                add r10,r14
+
+                ldr r11,e3db
+                smull r14,r11,r3,r11
+                lsr r14,#10
+                orr r14,r14,r11,lsl #22
+                add r10,r14
+
+                ldr r11,e2db
+                smull r14,r11,r2,r11
+                lsr r14,#10
+                orr r14,r14,r11,lsl #22
+                add r10,r14
+
+                ldr r11,e1db
+                smull r14,r11,r1,r11
+                lsr r14,#10
+                orr r14,r14,r11,lsl #22
+                add r10,r14
+
+
+                ldr r14,preamp
+                lsl r14,#18
+                smull r11,r10,r14,r10
+
+                lsl r10,#4
+
+                cmp r10,#0x8000000
+                movge r10,#0x8000000
+                subge r10,#1
+                cmp r10,#-0x8000000
+                movle r10,#-0x8000000
+                addle r10,#1
+
+
+                add r10,#0x8000000
+
+                str r10,[r12],#8
+
+                subs r0,#1
+                bne p102
+
+                str r1,filter1lr
+                str r2,filter2lr
+                str r3,filter3lr
+                str r4,filter4lr
+                str r5,filter5lr
+                str r6,filter6lr
+                str r7,filter7lr
+                str r8,filter8lr
+                str r9,filter9lr
+
+                b p999
+
+e1freq:         .long 0x000D6775       //30
+
+filter1ll:      .long 0
+filter2ll:      .long 0
+filter3ll:      .long 0
+filter4ll:      .long 0
+filter5ll:      .long 0
+filter6ll:      .long 0
+filter7ll:      .long 0
+filter8ll:      .long 0
+filter9ll:      .long 0
+
+filter1lr:      .long 0
+filter2lr:      .long 0
+filter3lr:      .long 0
+filter4lr:      .long 0
+filter5lr:      .long 0
+filter6lr:      .long 0
+filter7lr:      .long 0
+filter8lr:      .long 0
+filter9lr:      .long 0
+
+e10db:           .long 0
+e9db:            .long 0
+e8db:            .long 0
+e7db:            .long 0
+e6db:            .long 0
+e5db:            .long 0
+e4db:            .long 0
+e3db:            .long 0
+e2db:            .long 0
+e1db:            .long 0
+preamp:          .long 0
+
+len1:             .long 0
+bufaddr1:         .long 0
+
+p999:            pop {r0-r12,r14}
+                end;
+
+end;
+
+procedure equalizer(bufaddr,len:integer);
+
+label p101,p999,  testfreq,
+      filter1bl, filter1br, filter1ll, filter1lr,
+      filter2bl, filter2br, filter2ll, filter2lr,
+      filter3bl, filter3br, filter3ll, filter3lr,
+      filter4bl, filter4br, filter4ll, filter4lr,
+      filter5bl, filter5br, filter5ll, filter5lr,
+      filter6bl, filter6br, filter6ll, filter6lr,
+      filter7bl, filter7br, filter7ll, filter7lr,
+      filter8bl, filter8br, filter8ll, filter8lr,
+      filter9bl, filter9br, filter9ll, filter9lr,
+      filter0bl, filter0br, filter0ll, filter0lr,
+      resl,resr,
+      e1freq, e2freq, e3freq, e4freq, e5freq, e6freq, e7freq, e8freq, e9freq, e10freq;
+
+
+var  e1db,e2db,e3db,e4db,e5db,e6db,e7db,e8db,e9db,e10db:integer;
+     preamp:integer;
+
+begin
+e1db:=eqdbtable[eq[0]];
+e2db:=eqdbtable[eq[1]];
+e3db:=eqdbtable[eq[2]];
+e4db:=eqdbtable[eq[3]];
+e5db:=eqdbtable[eq[4]];
+e6db:=eqdbtable[eq[5]];
+e7db:=eqdbtable[eq[6]];
+e8db:=eqdbtable[eq[7]];
+e9db:=eqdbtable[eq[8]];
+e10db:=eqdbtable[eq[9]];
+preamp:=eqdbtable[eq_preamp];
+
+
+//signed 28bit
+
+                asm
+
+                push {r0-r10,r12,r14}
+
+                ldr r7,len
+                //lsr r7,#1
+                ldr r1,bufaddr
+
+
+p101:           mov r0,#0
+                mov r10,#0
+                mov r12,#0
+                ldr r8,[r1],#4
+                sub r8,#0x8000000    //signed  28 bit
+                ldr r9,[r1],#4
+                sub r9,#0x8000000    //signed  28 bit
+
+
+//---- One band pass filter #1
+
+                mov r0,r8       //input
+                ldr r2,filter1bl
+                ldr r3,filter1ll
+                sub r0,r0,r2,asr #1
+                sub r0,r0,r3            //r0=input-filterb-filterl (=filterh)
+                ldr r6,e1freq
+                smull r4,r5,r0,r6    // result in r5
+                add r2,r5            // filter_b:=filter-b+freq*filter_h
+                smull r4,r5,r2,r6
+                add r3,r5            // filter_l:=filter_l+freq*filter_b
+                str r2,filter1bl
+                str r3,filter1ll
+
+                ldr r14,e1db
+                smull r2,r5,r2,r14
+                lsr r2,#10
+                orr r2,r2,r5,lsl #22
+
+                add r10,r2
+
+
+                mov r0,r9            //input
+                ldr r2,filter1br
+                ldr r3,filter1lr
+                sub r0,r0,r2,asr #1
+                sub r0,r0,r3            //r0=input-filterb-filterl (=filterh)
+                smull r4,r5,r0,r6    // result in r5
+                add r2,r5            // filter_b:=filter-b+freq*filter_h
+                smull r4,r5,r2,r6
+                add r3,r5            // filter_l:=filter_l+freq*filter_b
+                str r2,filter1br
+                str r3,filter1lr
+
+               // ldr r5,e1db
+                smull r2,r5,r2,r14
+                lsr r2,#10
+                orr r2,r2,r5,lsl #22
+
+                add r12,r2
+
+
+
+//-----------------    #2
+
+                mov r0,r8       //input
+                ldr r2,filter2bl
+                ldr r3,filter2ll
+                sub r0,r0,r2,asr #1
+                sub r0,r0,r3          //r0=input-filterb-filterl (=filterh)
+                ldr r6,e2freq
+                smull r4,r5,r0,r6    // result in r5
+                add r2,r5            // filter_b:=filter-b+freq*filter_h
+                smull r4,r5,r2,r6
+                add r3,r5            // filter_l:=filter_l+freq*filter_b
+                str r2,filter2bl
+                str r3,filter2ll
+
+                ldr r14,e2db
+                smull r2,r5,r2,r14
+                lsr r2,#10
+                orr r2,r2,r5,lsl #22
+
+                  add r10,r2
+
+
+
+                mov r0,r9            //input
+                ldr r2,filter2br
+                ldr r3,filter2lr
+                sub r0,r0,r2,asr #1
+                sub r0,r0,r3            //r0=input-filterb-filterl (=filterh)
+                smull r4,r5,r0,r6    // result in r5
+                add r2,r5            // filter_b:=filter-b+freq*filter_h
+                smull r4,r5,r2,r6
+                add r3,r5            // filter_l:=filter_l+freq*filter_b
+                str r2,filter2br
+                str r3,filter2lr
+
+
+             //   ldr r5,e2db
+                smull r2,r5,r2,r14
+                lsr r2,#10
+                orr r2,r2,r5,lsl #22
+
+                     add r12,r2
+
+
+
+//-----------------    #3
+
+                mov r0,r8       //input
+                ldr r2,filter3bl
+                ldr r3,filter3ll
+                sub r0,r0,r2,asr #1
+                sub r0,r0,r3          //r0=input-filterb-filterl (=filterh)
+                ldr r6,e3freq
+                smull r4,r5,r0,r6    // result in r5
+                add r2,r5            // filter_b:=filter-b+freq*filter_h
+                smull r4,r5,r2,r6
+                add r3,r5            // filter_l:=filter_l+freq*filter_b
+                str r2,filter3bl
+                str r3,filter3ll
+
+                ldr r14,e3db
+                smull r2,r5,r2,r14
+                lsr r2,#10
+                orr r2,r2,r5,lsl #22
+
+                 add r10,r2
+
+
+
+
+                mov r0,r9            //input
+                ldr r2,filter3br
+                ldr r3,filter3lr
+                sub r0,r0,r2,asr #1
+                sub r0,r0,r3            //r0=input-filterb-filterl (=filterh)
+                smull r4,r5,r0,r6    // result in r5
+                add r2,r5            // filter_b:=filter-b+freq*filter_h
+                smull r4,r5,r2,r6
+                add r3,r5            // filter_l:=filter_l+freq*filter_b
+                str r2,filter3br
+                str r3,filter3lr
+
+             // ldr r14,e3db
+                smull r2,r5,r2,r14
+                lsr r2,#10
+                orr r2,r2,r5,lsl #22
+
+                     add r12,r2
+
+
+//----------------    #4
+
+                mov r0,r8       //input
+                ldr r2,filter4bl
+                ldr r3,filter4ll
+                sub r0,r0,r2,asr #1
+                sub r0,r0,r3          //r0=input-filterb-filterl (=filterh)
+                ldr r6,e4freq
+                smull r4,r5,r0,r6    // result in r5
+                add r2,r5            // filter_b:=filter-b+freq*filter_h
+                smull r4,r5,r2,r6
+                add r3,r5            // filter_l:=filter_l+freq*filter_b
+                str r2,filter4bl
+                str r3,filter4ll
+
+                    ldr r14,e4db
+                smull r2,r5,r2,r14
+                lsr r2,#10
+                orr r2,r2,r5,lsl #22
+
+                   add r10,r2
+
+
+
+                mov r0,r9            //input
+                ldr r2,filter4br
+                ldr r3,filter4lr
+                sub r0,r0,r2,asr #1
+                sub r0,r0,r3            //r0=input-filterb-filterl (=filterh)
+                smull r4,r5,r0,r6    // result in r5
+                add r2,r5            // filter_b:=filter-b+freq*filter_h
+                smull r4,r5,r2,r6
+                add r3,r5            // filter_l:=filter_l+freq*filter_b
+                str r2,filter4br
+                str r3,filter4lr
+
+               // ldr r5,e4db
+                smull r2,r5,r2,r14
+                lsr r2,#10
+                orr r2,r2,r5,lsl #22
+
+                add r12,r2
+
+
+
+//-----------------    #5
+
+                mov r0,r8       //input
+                ldr r2,filter5bl
+                ldr r3,filter5ll
+                sub r0,r0,r2,asr #1
+                sub r0,r0,r3          //r0=input-filterb-filterl (=filterh)
+                ldr r6,e5freq
+                smull r4,r5,r0,r6    // result in r5
+                add r2,r5            // filter_b:=filter-b+freq*filter_h
+                smull r4,r5,r2,r6
+                add r3,r5            // filter_l:=filter_l+freq*filter_b
+                str r2,filter5bl
+                str r3,filter5ll
+
+                ldr r14,e5db
+                smull r2,r5,r2,r14
+                lsr r2,#10
+                orr r2,r2,r5,lsl #22
+
+                  add r10,r2
+
+
+                mov r0,r9            //input
+                ldr r2,filter5br
+                ldr r3,filter5lr
+                sub r0,r0,r2,asr #1
+                sub r0,r0,r3            //r0=input-filterb-filterl (=filterh)
+                smull r4,r5,r0,r6    // result in r5
+                add r2,r5            // filter_b:=filter-b+freq*filter_h
+                smull r4,r5,r2,r6
+                add r3,r5            // filter_l:=filter_l+freq*filter_b
+                str r2,filter5br
+                str r3,filter5lr
+
+             //ldr r5,e5db
+                smull r2,r5,r2,r14
+                lsr r2,#10
+                orr r2,r2,r5,lsl #22
+
+                     add r12,r2
+
+
+
+//----------------    #6
+
+                mov r0,r8       //input
+                ldr r2,filter6bl
+                ldr r3,filter6ll
+                sub r0,r0,r2,asr #1
+                sub r0,r0,r3          //r0=input-filterb-filterl (=filterh)
+                ldr r6,e6freq
+                smull r4,r5,r0,r6    // result in r5
+                add r2,r5            // filter_b:=filter-b+freq*filter_h
+                smull r4,r5,r2,r6
+                add r3,r5            // filter_l:=filter_l+freq*filter_b
+                str r2,filter6bl
+                str r3,filter6ll
+
+                ldr r14,e6db
+                smull r2,r5,r2,r14
+                lsr r2,#10
+                orr r2,r2,r5,lsl #22
+
+                add r10,r2
+
+
+                mov r0,r9            //input
+                ldr r2,filter6br
+                ldr r3,filter6lr
+                sub r0,r0,r2,asr #1
+                sub r0,r0,r3            //r0=input-filterb-filterl (=filterh)
+                smull r4,r5,r0,r6    // result in r5
+                add r2,r5            // filter_b:=filter-b+freq*filter_h
+                smull r4,r5,r2,r6
+                add r3,r5            // filter_l:=filter_l+freq*filter_b
+                str r2,filter6br
+                str r3,filter6lr
+
+              // ldr r5,e6db
+                smull r2,r5,r2,r14
+                lsr r2,#10
+                orr r2,r2,r5,lsl #22
+               add r12,r2
+
+
+//----------------    #7
+
+                mov r0,r8       //input
+                ldr r2,filter7bl
+                ldr r3,filter7ll
+                sub r0,r0,r2,asr #1
+                sub r0,r0,r3          //r0=input-filterb-filterl (=filterh)
+                ldr r6,e7freq
+                smull r4,r5,r0,r6    // result in r5
+                add r2,r5            // filter_b:=filter-b+freq*filter_h
+                smull r4,r5,r2,r6
+                add r3,r5            // filter_l:=filter_l+freq*filter_b
+                str r2,filter7bl
+                str r3,filter7ll
+
+                ldr r14,e7db
+                smull r2,r5,r2,r14
+                lsr r2,#10
+                orr r2,r2,r5,lsl #22
+
+                  add r10,r2
+
+
+
+                mov r0,r9            //input
+                ldr r2,filter7br
+                ldr r3,filter7lr
+                sub r0,r0,r2,asr #1
+                sub r0,r0,r3            //r0=input-filterb-filterl (=filterh)
+                smull r4,r5,r0,r6    // result in r5
+                add r2,r5            // filter_b:=filter-b+freq*filter_h
+                smull r4,r5,r2,r6
+                add r3,r5            // filter_l:=filter_l+freq*filter_b
+                str r2,filter7br
+                str r3,filter7lr
+
+             //  ldr r5,e7db
+                smull r2,r5,r2,r14
+                lsr r2,#10
+                orr r2,r2,r5,lsl #22
+            add r12,r2
+
+
+//----------------    #8
+
+                mov r0,r8       //input
+                ldr r2,filter8bl
+                ldr r3,filter8ll
+                sub r0,r0,r2,asr #1
+                sub r0,r0,r3          //r0=input-filterb-filterl (=filterh)
+                ldr r6,e8freq
+                smull r4,r5,r0,r6    // result in r5
+                add r2,r5            // filter_b:=filter-b+freq*filter_h
+                smull r4,r5,r2,r6
+                add r3,r5            // filter_l:=filter_l+freq*filter_b
+                str r2,filter8bl
+                str r3,filter8ll
+
+
+                ldr r14,e8db
+                smull r2,r5,r2,r14
+                lsr r2,#10
+                orr r2,r2,r5,lsl #22
+
+                  add r10,r2
+
+
+                mov r0,r9            //input
+                ldr r2,filter8br
+                ldr r3,filter8lr
+                sub r0,r0,r2,asr #1
+                sub r0,r0,r3            //r0=input-filterb-filterl (=filterh)
+                smull r4,r5,r0,r6    // result in r5
+                add r2,r5            // filter_b:=filter-b+freq*filter_h
+                smull r4,r5,r2,r6
+                add r3,r5            // filter_l:=filter_l+freq*filter_b
+                str r2,filter8br
+                str r3,filter8lr
+
+             //  ldr r5,e8db
+                smull r2,r5,r2,r14
+                lsr r2,#10
+                orr r2,r2,r5,lsl #22
+
+             add r12,r2
+
+
+//----------------    #9
+
+                mov r0,r8       //input
+                ldr r2,filter9bl
+                ldr r3,filter9ll
+                sub r0,r0,r2,asr #1
+                sub r0,r0,r3          //r0=input-filterb-filterl (=filterh)
+                ldr r6,e9freq
+                smull r4,r5,r0,r6    // result in r5
+                add r2,r5            // filter_b:=filter-b+freq*filter_h
+                smull r4,r5,r2,r6
+                add r3,r5            // filter_l:=filter_l+freq*filter_b
+                str r2,filter9bl
+                str r3,filter9ll
+
+                ldr r14,e9db
+                smull r2,r5,r2,r14
+                lsr r2,#10
+                orr r2,r2,r5,lsl #22
+
+
+                  add r10,r2
+
+
+                mov r0,r9            //input
+                ldr r2,filter9br
+                ldr r3,filter9lr
+                sub r0,r0,r2,asr #1
+                sub r0,r0,r3            //r0=input-filterb-filterl (=filterh)
+                smull r4,r5,r0,r6    // result in r5
+                add r2,r5            // filter_b:=filter-b+freq*filter_h
+                smull r4,r5,r2,r6
+                add r3,r5            // filter_l:=filter_l+freq*filter_b
+                str r2,filter9br
+                str r3,filter9lr
+
+              // ldr r5,e9db
+                smull r2,r5,r2,r14
+                lsr r2,#10
+                orr r2,r2,r5,lsl #22
+                         add r12,r2
+
+
+//----------------    #10
+
+                mov r0,r8       //input
+                ldr r2,filter0bl
+                ldr r3,filter0ll
+                sub r0,r0,r2,asr #1
+                sub r0,r0,r3          //r0=input-filterb-filterl (=filterh)
+                ldr r6,e10freq
+                smull r4,r5,r0,r6    // result in r5
+                add r2,r5            // filter_b:=filter-b+freq*filter_h
+                smull r4,r5,r2,r6
+                add r3,r5            // filter_l:=filter_l+freq*filter_b
+                str r2,filter0bl
+                str r3,filter0ll
+
+                ldr r14,e10db
+                smull r2,r5,r2,r14
+                lsr r2,#10
+                orr r2,r2,r5,lsl #22
+
+                add r10,r2
+
+
+                mov r0,r9            //input
+                ldr r2,filter0br
+                ldr r3,filter0lr
+                sub r0,r0,r2,asr #1
+                sub r0,r0,r3            //r0=input-filterb-filterl (=filterh)
+                smull r4,r5,r0,r6    // result in r5
+                add r2,r5            // filter_b:=filter-b+freq*filter_h
+                smull r4,r5,r2,r6
+                add r3,r5            // filter_l:=filter_l+freq*filter_b
+                str r2,filter0br
+                str r3,filter0lr
+
+             //   ldr r5,e10db
+                smull r2,r5,r2,r14
+                lsr r2,#10
+                orr r2,r2,r5,lsl #22
+                add r12,r2
+
+
+// now the result is 28 bit signed while I need 28 bit unsigned
+
+                sub r1,#8
+
+                ldr r5,preamp
+                lsl r5,#18
+                smull r2,r10,r5,r10
+                smull r2,r12,r5,r12
+
+                lsl r10,#3
+                lsl r12,#3
+
+                cmp r10,#0x8000000
+                movge r10,#0x8000000
+                subge r10,#1
+                cmp r10,#-0x8000000
+                movle r10,#-0x8000000
+                addle r10,#1
+
+                cmp r12,#0x8000000
+                movge r12,#0x8000000
+                subge r12,#1
+                cmp r12,#-0x8000000
+                movle r12,#-0x8000000
+                addle r12,#1
+
+
+                add r10,#0x8000000
+                add r12,#0x8000000
+                str r10,[r1],#4
+                str r12,[r1],#4
+
+                subs r7,#1
+                bne p101
+
+
+                b p999
+
+testfreq:       .long 0x00001000
+e1freq:         .long 0x000D6775       //30
+e2freq:         .long 0x001ACEE9       //60
+e3freq:         .long 0x00359DD3       //120
+e4freq:         .long 0x006B3BA7       //250
+e5freq:         .long 0x00D6774F       //500
+e6freq:         .long 0x01ACEE9F       //1k
+e7freq:         .long 0x0359DD3E       //2k
+e8freq:         .long 0x06B3BA7C       //4k
+e9freq:         .long 0x0D6774F9       //8k
+e10freq:        .long 0x1ACEE9F3       //16k
+
+filter1ll:      .long 0
+filter1lr:      .long 0
+filter1bl:      .long 0
+filter1br:      .long 0
+
+filter2ll:      .long 0
+filter2lr:      .long 0
+filter2bl:      .long 0
+filter2br:      .long 0
+
+filter3ll:      .long 0
+filter3lr:      .long 0
+filter3bl:      .long 0
+filter3br:      .long 0
+
+filter4ll:      .long 0
+filter4lr:      .long 0
+filter4bl:      .long 0
+filter4br:      .long 0
+
+filter5ll:      .long 0
+filter5lr:      .long 0
+filter5bl:      .long 0
+filter5br:      .long 0
+
+filter6ll:      .long 0
+filter6lr:      .long 0
+filter6bl:      .long 0
+filter6br:      .long 0
+
+filter7ll:      .long 0
+filter7lr:      .long 0
+filter7bl:      .long 0
+filter7br:      .long 0
+
+filter8ll:      .long 0
+filter8lr:      .long 0
+filter8bl:      .long 0
+filter8br:      .long 0
+
+filter9ll:      .long 0
+filter9lr:      .long 0
+filter9bl:      .long 0
+filter9br:      .long 0
+
+filter0ll:      .long 0
+filter0lr:      .long 0
+filter0bl:      .long 0
+filter0br:      .long 0
+
+resl:           .long 0
+resr:           .long 0
+
+
+p999:            pop {r0-r10,r12,r14}
+                end;
+
+end;
+
+
+procedure oversample1(bufaddr,outbuf,oversample,len:integer);
+
+label p101,p102;
+
+// -- rev 20170126
+
+begin
+                 asm
+                 push {r0-r6}
+
+                 ldr r5,bufaddr        // init buffers addresses
+                 ldr r2,outbuf
+                 ldr r3,oversample
+                 ldr r0,len             // outer loop counter
+
+ p102:           mov r1,r3              // inner loop counter
+                 ldr r4,[r5],#4         // new input value left
+                 ldr r6,[r5],#4         // new input value right
+
+             //        asr r4,#2
+             //        asr r6,#2
+
+ p101:           str r4,[r2],#4
+                 str r6,[r2],#4
+                 subs r1,#1
+                 bne p101
+                 subs r0,#1
+                 bne p102
+
+                 pop {r0-r6}
+                 end;
+
+//CleanDataCacheRange(outbuf,$10000);
+end;
+
+function noiseshaper8a(bufaddr,outbuf,oversample,len:integer):integer;
+
+label p102,p999,i1l,i1r,i2l,i2r;
+var len2:integer;
+     et2:int64;
+// -- rev 20170701
+
+begin
+et2:=gettime;
+oversample1(bufaddr,outbuf,oversample,len);
+len2:=len*oversample;
+if equalizer_active then equalizer2(outbuf,len2);
+
+
+                 asm
+                 push {r0-r10,r12,r14}
+                 ldr r3,i1l            // init integrators
+                 ldr r4,i1r
+                 ldr r7,i2l
+                 ldr r8,i2r
+                 ldr r5,outbuf        // init buffers addresses
+                 ldr r2,outbuf
+
+                 ldr r0,len2            // outer loop counter
+
+ p102:           ldr r12,[r5],#4       // new input value left
+                 ldr r6,[r5],#4        // new input value right
+
+                 add r3,r6             // inner loop: do oversampling
+                 add r4,r12
+                 add r7,r3
+                 add r8,r4
+                 mov r9,r7,asr #20
+                 mov r10,r9,lsl #20
+                 sub r3,r10
+                 sub r7,r10
+                 add r9,#1            // kill the negative bug :) :)
+                 str r9,[r2],#4
+                 mov r9,r8,asr #20
+                 mov r10,r9,lsl #20
+                 sub r4,r10
+                 sub r8,r10
+                 add r9,#1
+                 str r9,[r2],#4
+
+                 subs r0,#1
+                 bne p102
+
+                 str r3,i1l
+                 str r4,i1r
+                 str r7,i2l
+                 str r8,i2r
+                 str r2,result
+
+                 b p999
+
+i1l:            .long 0
+i1r:            .long 0
+i2l:            .long 0
+i2r:            .long 0
+
+p999:           pop {r0-r10,r12,r14}
+                end;
+
+CleanDataCacheRange(outbuf,$10000);
+et:=gettime-et2;
 end;
 
 
@@ -833,7 +1984,7 @@ var
 begin
 AudioOn:=1;
 ThreadSetCPU(ThreadGetCurrent,CPU_ID_1);
-ThreadSetPriority(ThreadGetCurrent,6);
+ThreadSetPriority(ThreadGetCurrent,7);
 threadsleep(1);
 repeat
   repeat threadsleep(1) until (dma_cs and 2) <>0 ;
@@ -874,8 +2025,8 @@ repeat
         AUDIO_F32: for i:=0 to CurrentAudioSpec.samples-1 do begin samplebuffer_32_ptr[2*i]:= round(vl*32768*samplebuffer_ptr_f[i])+$8000000; samplebuffer_32_ptr[2*i+1]:= round(vr*32768*samplebuffer_ptr_f[i])+$8000000; end;
         end;
       end;
-    if nc=nocache+ctrl1_adr then noiseshaper8(samplebuffer_32_adr,dmabuf1_adr,CurrentAudioSpec.oversample,CurrentAudioSpec.samples)
-    else noiseshaper8(samplebuffer_32_adr,dmabuf2_adr,CurrentAudioSpec.oversample,CurrentAudioSpec.samples);
+    if nc=nocache+ctrl1_adr then noiseshaper8a (samplebuffer_32_adr,dmabuf1_adr,CurrentAudioSpec.oversample,CurrentAudioSpec.samples)
+    else noiseshaper8a (samplebuffer_32_adr,dmabuf2_adr,CurrentAudioSpec.oversample,CurrentAudioSpec.samples);
     if nc=nocache+ctrl1_adr then CleanDataCacheRange(dmabuf1_adr,$10000) else CleanDataCacheRange(dmabuf2_adr,$10000);
     end;
   dma_cs:=$00FF0003;
@@ -894,6 +2045,24 @@ function  SA_GetCurrentRange:integer;
 
 begin
 result:=CurrentAudioSpec.range;
+end;
+
+procedure  SA_SetEQ(band,db:integer);
+
+begin
+if band<0 then exit;
+if band>9 then exit;
+if db>12 then db:=12;
+if db<-12 then db:=-12;
+eq[band]:=db;
+end;
+
+procedure  SA_SetEQpreamp(db:integer);
+
+begin
+if db>12 then db:=12;
+if db<-12 then db:=-12;
+eq_preamp:=db;
 end;
 
 end.
